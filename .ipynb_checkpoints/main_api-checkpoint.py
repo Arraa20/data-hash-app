@@ -3,12 +3,20 @@ from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 import hashlib
 import pandas as pd
+import os
 
 app = FastAPI(title="Phone Hashing API")
 
-API_KEY = "my-secret-api-key-123"
-api_key_header = APIKeyHeader(name="X-API-Key")
+# Read from Railway env variables
+API_KEY = os.getenv("API_KEY")
+SECRET_SALT = os.getenv("SECRET_SALT")
 
+api_key_header = APIKeyHeader(
+    name="X-API-Key",
+    auto_error=True
+)
+
+# Enable CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,33 +25,35 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-SECRET_SALT = "my_secret_salt"
-
 def verify_api_key(api_key: str = Depends(api_key_header)):
     if api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 def sha256_hash(value: str) -> str:
-    return hashlib.sha256((value + SECRET_SALT).encode()).hexdigest()
+    return hashlib.sha256((value + SECRET_SALT).encode("utf-8")).hexdigest()
 
-@app.post("/hash")
-def hash_single_phone(
-    phone: str,
-    api_key: str = Depends(verify_api_key)
-):
+@app.post("/hash", dependencies=[Depends(verify_api_key)])
+def hash_single_phone(phone: str):
     phone = phone.strip()
     if not phone.isdigit():
         raise HTTPException(status_code=400, detail="Invalid phone number")
 
-    return {"hashed_phone": sha256_hash(phone)}
+    hashed_phone = sha256_hash(phone)
+    return {"hashed_phone": hashed_phone}
 
-@app.post("/hash_csv")
-def hash_csv(file_path: str = Query(...)):
-    df = pd.read_csv(file_path)
-    if "phone" not in df.columns:
-        raise HTTPException(status_code=400, detail="CSV must have 'phone' column")
+@app.post("/hash_csv", dependencies=[Depends(verify_api_key)])
+def hash_csv(file_path: str = Query(..., description="Path to CSV with 'phone' column")):
+    try:
+        df = pd.read_csv(file_path)
 
-    df["hashed_phone"] = df["phone"].astype(str).apply(sha256_hash)
-    df.to_csv("hashed_output.csv", index=False)
+        if "phone" not in df.columns:
+            raise HTTPException(status_code=400, detail="CSV must have 'phone' column")
 
-    return {"message": "CSV hashed successfully"}
+        df["hashed_phone"] = df["phone"].astype(str).apply(sha256_hash)
+        output_path = "hashed_output.csv"
+        df.to_csv(output_path, index=False)
+
+        return {"message": f"Hashed CSV saved as {output_path}"}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
