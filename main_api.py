@@ -6,8 +6,39 @@ import pandas as pd
 
 app = FastAPI(title="Phone Hashing API")
 
+from fastapi.openapi.utils import get_openapi
+
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+
+    openapi_schema = get_openapi(
+        title="Phone Hashing API",
+        version="1.0.0",
+        description="API for hashing phone numbers",
+        routes=app.routes,
+    )
+
+    openapi_schema["components"]["securitySchemes"] = {
+        "ApiKeyAuth": {
+            "type": "apiKey",
+            "in": "header",
+            "name": "X-API-Key",
+        }
+    }
+
+    for path in openapi_schema["paths"].values():
+        for method in path.values():
+            method["security"] = [{"ApiKeyAuth": []}]
+
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+app.openapi = custom_openapi
+
 API_KEY = "my-secret-api-key-123"
-api_key_header = APIKeyHeader(name="X-API-Key")
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
 
 app.add_middleware(
     CORSMiddleware,
