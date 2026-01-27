@@ -1,9 +1,13 @@
 from fastapi import FastAPI, HTTPException, Depends, Query
 from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import UploadFile, File
+from fastapi.responses import FileResponse
 import hashlib
 import pandas as pd
 import os
+
+
 
 app = FastAPI(title="Phone Hashing API")
 
@@ -42,18 +46,26 @@ def hash_single_phone(phone: str):
     return {"hashed_phone": hashed_phone}
 
 @app.post("/hash_csv", dependencies=[Depends(verify_api_key)])
-def hash_csv(file_path: str = Query(..., description="Path to CSV with 'phone' column")):
+async def hash_csv(file: UploadFile = File(...)):
+    if not file.filename.endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Only CSV files allowed")
+
     try:
-        df = pd.read_csv(file_path)
+        df = pd.read_csv(file.file)
 
         if "phone" not in df.columns:
-            raise HTTPException(status_code=400, detail="CSV must have 'phone' column")
+            raise HTTPException(status_code=400, detail="CSV must contain 'phone' column")
 
         df["hashed_phone"] = df["phone"].astype(str).apply(sha256_hash)
+
         output_path = "hashed_output.csv"
         df.to_csv(output_path, index=False)
 
-        return {"message": f"Hashed CSV saved as {output_path}"}
+        return FileResponse(
+            path=output_path,
+            media_type="text/csv",
+            filename="hashed_output.csv"
+        )
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
