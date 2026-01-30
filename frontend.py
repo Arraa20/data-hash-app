@@ -19,7 +19,7 @@ if uploaded_file and api_key:
                     "file": (uploaded_file.name, uploaded_file, "text/csv")
                 }
                 headers = {
-                    "api-key": api_key
+                    "X-API-Key": api_key
                 }
 
                 response = requests.post(
