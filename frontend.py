@@ -6,8 +6,8 @@ st.set_page_config(page_title="Phone Hashing Tool", layout="centered")
 st.title("📞 Phone Number Hashing Tool")
 st.caption("Upload a CSV with a `phone` column. Output will be SHA-256 hashed.")
 
-# ✅ Use API service URL from Railway
-API_URL = "https://phone-hash-api.up.railway.app/hash_csv"
+# Replace with your FastAPI service public URL from Railway
+API_URL = "https://your-fastapi-service.up.railway.app/hash_csv"
 
 api_key = st.text_input("API Key", type="password")
 uploaded_file = st.file_uploader("Upload CSV file", type=["csv"])

@@ -3,10 +3,9 @@ from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 import hashlib
-#import pandas as pd
-import os
 import csv
-import hashlib
+import os
+import tempfile
 
 app = FastAPI(title="Phone Hashing API")
 
@@ -16,10 +15,10 @@ SECRET_SALT = os.getenv("SECRET_SALT")
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
 
-# Enable CORS for frontend service
+# Enable CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # or restrict to frontend URL
+    allow_origins=["*"],  # Replace "*" with frontend URL for security
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -40,20 +39,32 @@ def hash_single_phone(phone: str):
     return {"hashed_phone": sha256_hash(phone)}
 
 @app.post("/hash_csv", dependencies=[Depends(verify_api_key)])
-import csv
-import hashlib
+async def hash_csv(file: UploadFile = File(...)):
+    if not file.filename.endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Only CSV files allowed")
 
-def hash_csv_file(input_file, output_file, salt):
-    with open(input_file, newline='') as infile, open(output_file, 'w', newline='') as outfile:
-        reader = csv.DictReader(infile)
-        writer = csv.DictWriter(outfile, fieldnames=["phone", "hashed_phone"])
+    try:
+        # Create a temporary output file
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
+        output_path = temp_file.name
+
+        # Read input CSV and write hashed CSV
+        input_content = file.file.read().decode("utf-8").splitlines()
+        reader = csv.DictReader(input_content)
+        if "phone" not in reader.fieldnames:
+            raise HTTPException(status_code=400, detail="CSV must contain 'phone' column")
+
+        writer = csv.DictWriter(temp_file, fieldnames=["phone", "hashed_phone"])
         writer.writeheader()
+
         for row in reader:
-            phone = row["phone"]
-            hashed = hashlib.sha256((phone + salt).encode()).hexdigest()
+            phone = row["phone"].strip()
+            hashed = sha256_hash(phone)
             writer.writerow({"phone": phone, "hashed_phone": hashed})
 
-# Optional debug route
-@app.get("/debug")
-def debug():
-    return {"API_KEY_loaded": API_KEY is not None, "SECRET_SALT_loaded": SECRET_SALT is not None}
+        temp_file.close()
+
+        return FileResponse(path=output_path, media_type="text/csv", filename="hashed_output.csv")
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
