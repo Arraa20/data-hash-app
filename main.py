@@ -3,8 +3,10 @@ from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 import hashlib
-import pandas as pd
+#import pandas as pd
 import os
+import csv
+import hashlib
 
 app = FastAPI(title="Phone Hashing API")
 
@@ -38,19 +40,18 @@ def hash_single_phone(phone: str):
     return {"hashed_phone": sha256_hash(phone)}
 
 @app.post("/hash_csv", dependencies=[Depends(verify_api_key)])
-async def hash_csv(file: UploadFile = File(...)):
-    if not file.filename.endswith(".csv"):
-        raise HTTPException(status_code=400, detail="Only CSV files allowed")
-    try:
-        df = pd.read_csv(file.file)
-        if "phone" not in df.columns:
-            raise HTTPException(status_code=400, detail="CSV must contain 'phone' column")
-        df["hashed_phone"] = df["phone"].astype(str).apply(sha256_hash)
-        output_path = "hashed_output.csv"
-        df.to_csv(output_path, index=False)
-        return FileResponse(path=output_path, media_type="text/csv", filename="hashed_output.csv")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+import csv
+import hashlib
+
+def hash_csv_file(input_file, output_file, salt):
+    with open(input_file, newline='') as infile, open(output_file, 'w', newline='') as outfile:
+        reader = csv.DictReader(infile)
+        writer = csv.DictWriter(outfile, fieldnames=["phone", "hashed_phone"])
+        writer.writeheader()
+        for row in reader:
+            phone = row["phone"]
+            hashed = hashlib.sha256((phone + salt).encode()).hexdigest()
+            writer.writerow({"phone": phone, "hashed_phone": hashed})
 
 # Optional debug route
 @app.get("/debug")
