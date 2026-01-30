@@ -6,11 +6,10 @@ import hashlib
 import csv
 import os
 import tempfile
-import io
 
 app = FastAPI(title="Phone Hashing API")
 
-# Railway environment variables
+# Environment variables
 API_KEY = os.getenv("API_KEY")
 SECRET_SALT = os.getenv("SECRET_SALT")
 
@@ -19,7 +18,7 @@ api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
 # Enable CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Replace "*" with frontend URL for security
+    allow_origins=["*"],  # replace with your frontend URL in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -45,20 +44,31 @@ async def hash_csv(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="Only CSV files allowed")
 
     try:
-        # Read CSV content as file-like object using StringIO
-        file_content = file.file.read().decode("utf-8")
-        reader = csv.DictReader(io.StringIO(file_content))
+        # Create a temporary output CSV file
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".csv", mode="w", newline="", encoding="utf-8")
+        writer = None
 
-        if "phone" not in reader.fieldnames:
-            raise HTTPException(status_code=400, detail="CSV must contain 'phone' column")
+        # Read CSV line by line (decode bytes safely)
+        for line in file.file:
+            decoded_line = line.decode("utf-8").strip()
+            if not decoded_line:
+                continue
 
-        # Write hashed CSV
-        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
-        writer = csv.DictWriter(temp_file, fieldnames=["phone", "hashed_phone"])
-        writer.writeheader()
+            # Split by comma (simple CSV parsing)
+            columns = decoded_line.split(",")
 
-        for row in reader:
-            phone = row["phone"].strip()
+            if writer is None:
+                # First line is header
+                if "phone" not in columns:
+                    raise HTTPException(status_code=400, detail="CSV must contain 'phone' column")
+                fieldnames = ["phone", "hashed_phone"]
+                writer = csv.DictWriter(temp_file, fieldnames=fieldnames)
+                writer.writeheader()
+                phone_index = columns.index("phone")
+                continue
+
+            # Write hashed row
+            phone = columns[phone_index].strip()
             hashed = sha256_hash(phone)
             writer.writerow({"phone": phone, "hashed_phone": hashed})
 
