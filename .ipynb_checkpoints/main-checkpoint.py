@@ -6,6 +6,7 @@ import hashlib
 import csv
 import os
 import tempfile
+import io
 
 app = FastAPI(title="Phone Hashing API")
 
@@ -44,16 +45,15 @@ async def hash_csv(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="Only CSV files allowed")
 
     try:
-        # Create a temporary output file
-        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
-        output_path = temp_file.name
+        # Read CSV content as file-like object using StringIO
+        file_content = file.file.read().decode("utf-8")
+        reader = csv.DictReader(io.StringIO(file_content))
 
-        # Read input CSV and write hashed CSV
-        input_content = file.file.read().decode("utf-8").splitlines()
-        reader = csv.DictReader(input_content)
         if "phone" not in reader.fieldnames:
             raise HTTPException(status_code=400, detail="CSV must contain 'phone' column")
 
+        # Write hashed CSV
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
         writer = csv.DictWriter(temp_file, fieldnames=["phone", "hashed_phone"])
         writer.writeheader()
 
@@ -64,7 +64,7 @@ async def hash_csv(file: UploadFile = File(...)):
 
         temp_file.close()
 
-        return FileResponse(path=output_path, media_type="text/csv", filename="hashed_output.csv")
+        return FileResponse(path=temp_file.name, media_type="text/csv", filename="hashed_output.csv")
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
