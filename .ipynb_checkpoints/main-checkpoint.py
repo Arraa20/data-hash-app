@@ -6,19 +6,19 @@ import hashlib
 import csv
 import os
 import tempfile
+import re
 
-app = FastAPI(title="Phone Hashing API")
+app = FastAPI(title="Meta-Friendly Phone Hashing API")
 
 # Environment variables
 API_KEY = os.getenv("API_KEY")
-SECRET_SALT = os.getenv("SECRET_SALT", "default_secret_salt")  # fallback for safety
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
 
 # Enable CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  
+    allow_origins=["*"],  # replace with frontend URL in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -28,21 +28,28 @@ def verify_api_key(api_key: str = Depends(api_key_header)):
     if api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
-# ✅ Enterprise-grade salted hashing
+# Meta-compatible SHA-256 hash (no salt)
 def sha256_hash(value: str) -> str:
-    salted = f"{value}{SECRET_SALT}"
-    return hashlib.sha256(salted.encode("utf-8")).hexdigest()
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
-# Single phone hashing API
+# Canonical phone normalization for Meta
+def normalize_phone(phone: str) -> str:
+    digits = re.sub(r"\D", "", phone)  # remove non-digits
+    if digits.startswith("0"):
+        digits = "94" + digits[1:]      # 0xxxx → 94xxxx
+    elif digits.startswith("7"):
+        digits = "94" + digits          # 7xxxx → 947xxxx
+    return digits
+
+# Single phone hashing endpoint
 @app.post("/hash", dependencies=[Depends(verify_api_key)])
 def hash_single_phone(phone: str):
-    phone = phone.strip()
-    if not phone.isdigit():
+    normalized = normalize_phone(phone.strip())
+    if not normalized.isdigit():
         raise HTTPException(status_code=400, detail="Invalid phone number")
+    return {"hashed_phone": sha256_hash(normalized)}
 
-    return {"hashed_phone": sha256_hash(phone)}
-
-# CSV hashing API
+# CSV hashing endpoint (any first column)
 @app.post("/hash_csv", dependencies=[Depends(verify_api_key)])
 async def hash_csv(file: UploadFile = File(...)):
     if not file.filename.endswith(".csv"):
@@ -61,30 +68,25 @@ async def hash_csv(file: UploadFile = File(...)):
 
             # Header row
             if writer is None:
-                if "phone" not in columns:
-                    raise HTTPException(status_code=400, detail="CSV must contain 'phone' column")
-
-                # ✅ ONLY hashed_phone column
-                fieldnames = ["hashed_phone"]
-                writer = csv.DictWriter(temp_file, fieldnames=fieldnames)
+                target_index = 0  # hash the first column
+                writer = csv.DictWriter(temp_file, fieldnames=["hashed_phone"])
                 writer.writeheader()
-
-                phone_index = columns.index("phone")
                 continue
 
-            # Data rows
-            phone = columns[phone_index].strip()
+            raw_value = columns[target_index].strip()
+            normalized = normalize_phone(raw_value)
+            if not normalized:
+                continue
 
-            if phone.isdigit():
-                hashed = sha256_hash(phone)
-                writer.writerow({"hashed_phone": hashed})
+            hashed = sha256_hash(normalized)
+            writer.writerow({"hashed_phone": hashed})
 
         temp_file.close()
 
         return FileResponse(
             path=temp_file.name,
             media_type="text/csv",
-            filename="anonymized_hashed_output.csv"
+            filename="hashed_output.csv"
         )
 
     except Exception as e:

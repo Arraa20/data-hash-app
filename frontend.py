@@ -3,8 +3,8 @@ import requests
 
 st.set_page_config(page_title="Phone Hashing Tool", layout="centered")
 
-st.title("📞 Phone Number Hashing Tool")
-st.caption("Upload a CSV with a `phone` column. Output will be SHA-256 hashed.")
+st.title("Data Hashing Tool")
+st.caption("Upload a CSV with numbers. Output will be enterprise grade hashed.")
 
 # Replace with your FastAPI service public URL from Railway
 API_URL = "https://data-hash-app-fastapi-production.up.railway.app/hash_csv"
@@ -42,4 +42,4 @@ if uploaded_file and api_key:
                 st.error("❌ Something went wrong")
                 st.code(str(e))
 else:
-    st.info("👆 Enter API key and upload a CSV to begin")
+    st.info("Enter API key and upload a CSV to begin")
