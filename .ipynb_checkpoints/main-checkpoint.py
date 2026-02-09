@@ -104,7 +104,7 @@ async def hash_csv(file: UploadFile = File(...)):
 # -------------------------
 # Hash & Push to Meta Endpoint
 # -------------------------
-@app.post("/hash_and_upload", dependencies=[Depends(verify_api_key)])
+@app.post("/hash_and_upload_csv", dependencies=[Depends(verify_api_key)])
 async def hash_and_upload(file: UploadFile = File(...)):
     if not file.filename.endswith(".csv"):
         raise HTTPException(status_code=400, detail="Only CSV allowed")
