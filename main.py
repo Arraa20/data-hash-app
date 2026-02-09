@@ -10,6 +10,8 @@ import re
 
 app = FastAPI(title="Meta Fast Phone & Email Hashing API")
 
+
+
 # ------------------- API Key -------------------
 API_KEY = os.getenv("API_KEY")
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
@@ -92,7 +94,10 @@ async def hash_csv(file: UploadFile = File(...)):
         writer.writerow([hashed_phone, hashed_email])
 
     temp_out.close()
-
+    
+    safe_filename = re.sub(r"[^\w\-_\.]", "_", file.filename)
+    output_filename = f"hashed_{safe_filename}"
+    
     return FileResponse(
         path=temp_out.name,
         media_type="text/csv",
