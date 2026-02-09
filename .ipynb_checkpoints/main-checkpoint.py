@@ -6,10 +6,15 @@ import hashlib, csv, os, tempfile, re
 
 app = FastAPI(title="Universal Data Anonymization API")
 
+# ------------------- API Key -------------------
 API_KEY = os.getenv("API_KEY")
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
 
-# CORS
+def verify_api_key(api_key: str = Depends(api_key_header)):
+    if api_key != API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
+# ------------------- CORS -------------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -18,12 +23,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-def verify_api_key(api_key: str = Depends(api_key_header)):
-    if api_key != API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid API key")
-
-# Normalize phone (Sri Lanka)
-def normalize_phone(p):
+# ------------------- Helpers -------------------
+def normalize_phone(p: str) -> str:
     p = re.sub(r"\D", "", p)
     if p.startswith("0"):
         return "94" + p[1:]
@@ -31,30 +32,29 @@ def normalize_phone(p):
         return "94" + p
     return p
 
-# Normalize email
-def normalize_email(e):
+def normalize_email(e: str) -> str:
     return e.strip().lower()
 
-# Hash
-def sha256(x):
+def sha256(x: str) -> str:
     return hashlib.sha256(x.encode()).hexdigest()
 
+# ------------------- Endpoint -------------------
 @app.post("/hash_csv", dependencies=[Depends(verify_api_key)])
 async def hash_csv(file: UploadFile = File(...)):
-
     if not file.filename.endswith(".csv"):
         raise HTTPException(status_code=400, detail="CSV only")
 
+    # Create temporary output file
     temp_out = tempfile.NamedTemporaryFile(delete=False, suffix=".csv", mode="w", newline="", encoding="utf-8")
     writer = csv.writer(temp_out)
 
+    # Read input CSV line by line
     reader = csv.reader((line.decode("utf-8") for line in file.file))
     headers = next(reader)
 
     # Detect columns
     schema = []
     col_type = []
-
     for h in headers:
         h_lower = h.lower()
         if "phone" in h_lower or "mobile" in h_lower:
@@ -67,21 +67,19 @@ async def hash_csv(file: UploadFile = File(...)):
             schema.append(None)
             col_type.append(None)
 
-    # Output header only hashed fields
+    # Write header
     writer.writerow([s for s in schema if s])
 
+    # Process rows line by line
     for row in reader:
         hashed_row = []
         for i, val in enumerate(row):
             if col_type[i] == "phone":
-                norm = normalize_phone(val)
-                hashed_row.append(sha256(norm))
+                hashed_row.append(sha256(normalize_phone(val)))
             elif col_type[i] == "email":
-                norm = normalize_email(val)
-                hashed_row.append(sha256(norm))
+                hashed_row.append(sha256(normalize_email(val)))
         if hashed_row:
             writer.writerow(hashed_row)
 
     temp_out.close()
-
     return FileResponse(temp_out.name, filename="meta_hashed.csv", media_type="text/csv")
