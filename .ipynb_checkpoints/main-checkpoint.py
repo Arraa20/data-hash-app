@@ -7,7 +7,7 @@ import hashlib, csv, os, tempfile, re
 app = FastAPI(title="Universal Data Anonymization API")
 
 # ------------------- API Key -------------------
-API_KEY = os.getenv("API_KEY")
+API_KEY = os.getenv("API_KEY", "testkey")  # fallback key for testing
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
 
 def verify_api_key(api_key: str = Depends(api_key_header)):
@@ -25,6 +25,8 @@ app.add_middleware(
 
 # ------------------- Helpers -------------------
 def normalize_phone(p: str) -> str:
+    if not p:
+        return ""
     p = re.sub(r"\D", "", p)
     if p.startswith("0"):
         return "94" + p[1:]
@@ -33,6 +35,8 @@ def normalize_phone(p: str) -> str:
     return p
 
 def normalize_email(e: str) -> str:
+    if not e:
+        return ""
     return e.strip().lower()
 
 def sha256(x: str) -> str:
@@ -48,9 +52,13 @@ async def hash_csv(file: UploadFile = File(...)):
     temp_out = tempfile.NamedTemporaryFile(delete=False, suffix=".csv", mode="w", newline="", encoding="utf-8")
     writer = csv.writer(temp_out)
 
-    # Read input CSV line by line
-    reader = csv.reader((line.decode("utf-8") for line in file.file))
-    headers = next(reader)
+    # Decode lines safely
+    try:
+        reader = csv.reader((line.decode("utf-8", errors="ignore") for line in file.file))
+        headers = next(reader)
+    except Exception as e:
+        temp_out.close()
+        raise HTTPException(status_code=400, detail=f"Failed to read CSV: {str(e)}")
 
     # Detect columns
     schema = []
@@ -70,8 +78,10 @@ async def hash_csv(file: UploadFile = File(...)):
     # Write header
     writer.writerow([s for s in schema if s])
 
-    # Process rows line by line
+    # Process rows
     for row in reader:
+        if not any(row):
+            continue  # skip empty rows
         hashed_row = []
         for i, val in enumerate(row):
             if col_type[i] == "phone":
