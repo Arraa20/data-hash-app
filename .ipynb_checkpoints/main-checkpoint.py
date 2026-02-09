@@ -3,13 +3,16 @@ from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 import hashlib, csv, os, tempfile, re
+import requests
 
-app = FastAPI(title="Meta Phone & Email Hashing API")
+app = FastAPI(title="Meta Phone & Email Hashing API with Upload")
 
 # =====================
-# Environment API Key
+# ENV API KEY
 # =====================
 API_KEY = os.getenv("API_KEY")
+META_ACCESS_TOKEN = os.getenv("META_ACCESS_TOKEN")  # Your Meta token
+META_AD_ACCOUNT_ID = os.getenv("META_AD_ACCOUNT_ID")  # e.g., act_1234567890
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
 
 # =====================
@@ -71,7 +74,7 @@ async def hash_csv(file: UploadFile = File(...)):
         try:
             decoded = line.decode("utf-8").strip()
         except UnicodeDecodeError:
-            decoded = line.decode("latin1").strip()  # fallback encoding
+            decoded = line.decode("latin1").strip()
 
         if not decoded or "phone" in decoded.lower():
             continue
@@ -90,20 +93,20 @@ async def hash_csv(file: UploadFile = File(...)):
     )
 
 # =====================
-# CSV UPLOAD TO META (Simulated)
+# UPLOAD TO META CUSTOM AUDIENCE
 # =====================
 @app.post("/hash_csv_upload", dependencies=[Depends(verify_api_key)])
 async def hash_csv_upload(file: UploadFile = File(...), audience_name: str = Form(...)):
     if not file.filename.endswith(".csv"):
         raise HTTPException(status_code=400, detail="Only CSV allowed")
 
-    hashed_list = []
-
+    # 1️⃣ Prepare hashed data
+    hashed_data = []
     for line in file.file:
         try:
             decoded = line.decode("utf-8").strip()
         except UnicodeDecodeError:
-            decoded = line.decode("latin1").strip()  # fallback
+            decoded = line.decode("latin1").strip()
 
         if not decoded or "phone" in decoded.lower():
             continue
@@ -111,20 +114,43 @@ async def hash_csv_upload(file: UploadFile = File(...), audience_name: str = For
         cols = decoded.split(",")
         phone, email = cols[0].strip(), cols[1].strip() if len(cols) > 1 else ""
         if phone:
-            hashed_list.append(sha256_hash(normalize_phone(phone)))
+            hashed_data.append({"hash_type": "PHONE", "value": sha256_hash(normalize_phone(phone))})
         if email:
-            hashed_list.append(sha256_hash(normalize_email(email)))
+            hashed_data.append({"hash_type": "EMAIL", "value": sha256_hash(normalize_email(email))})
 
-    rows_processed = len(hashed_list)
-    # =====================
-    # Placeholder Meta API Upload Simulation
-    # =====================
-    match_rate = min(100, rows_processed // 2)  # just dummy calculation
-    # In real implementation, here you would call Meta Marketing API
+    if not hashed_data:
+        raise HTTPException(status_code=400, detail="No valid phone/email found in CSV")
+
+    # 2️⃣ Create Custom Audience on Meta
+    create_url = f"https://graph.facebook.com/v17.0/act_{META_AD_ACCOUNT_ID}/customaudiences"
+    payload = {
+        "name": audience_name,
+        "subtype": "CUSTOM",
+        "description": "Hashed phones/emails uploaded via API",
+        "customer_file_source": "USER_PROVIDED_ONLY",
+        "access_token": META_ACCESS_TOKEN
+    }
+    response = requests.post(create_url, data=payload).json()
+    if "id" not in response:
+        raise HTTPException(status_code=500, detail=f"Meta API error: {response}")
+
+    audience_id = response["id"]
+
+    # 3️⃣ Add users to Custom Audience
+    add_url = f"https://graph.facebook.com/v17.0/{audience_id}/users"
+    # Meta API expects JSON of format { "payload": { "schema": ..., "data": [...] } }
+    data_payload = {
+        "payload": {
+            "schema": ["EMAIL", "PHONE"],  # Meta supports both
+            "data": [[h["value"]] for h in hashed_data]  # each row as list
+        },
+        "access_token": META_ACCESS_TOKEN
+    }
+    add_response = requests.post(add_url, json=data_payload).json()
 
     return JSONResponse({
+        "audience_id": audience_id,
         "audience_name": audience_name,
-        "success": True,
-        "rows_processed": rows_processed,
-        "match_rate_percent": match_rate
+        "rows_uploaded": len(hashed_data),
+        "meta_response": add_response
     })
