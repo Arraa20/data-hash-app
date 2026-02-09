@@ -2,12 +2,16 @@ from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
 from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-import hashlib, csv, os, tempfile, re
+import hashlib
+import csv
+import os
+import tempfile
+import re
 
-app = FastAPI(title="Universal Data Anonymization API")
+app = FastAPI(title="Meta Fast Phone & Email Hashing API")
 
 # ------------------- API Key -------------------
-API_KEY = os.getenv("API_KEY", "testkey")  # fallback key for testing
+API_KEY = os.getenv("API_KEY")
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
 
 def verify_api_key(api_key: str = Depends(api_key_header)):
@@ -24,72 +28,74 @@ app.add_middleware(
 )
 
 # ------------------- Helpers -------------------
-def normalize_phone(p: str) -> str:
-    if not p:
+def normalize_phone(phone: str) -> str:
+    if not phone:
         return ""
-    p = re.sub(r"\D", "", p)
-    if p.startswith("0"):
-        return "94" + p[1:]
-    if p.startswith("7") and len(p) == 9:
-        return "94" + p
-    return p
+    phone = re.sub(r"\D", "", phone)
+    if phone.startswith("0"):
+        phone = "94" + phone[1:]
+    elif phone.startswith("7") and len(phone) == 9:
+        phone = "94" + phone
+    elif phone.startswith("94"):
+        pass
+    return phone
 
-def normalize_email(e: str) -> str:
-    if not e:
+def normalize_email(email: str) -> str:
+    if not email:
         return ""
-    return e.strip().lower()
+    return email.strip().lower()
 
-def sha256(x: str) -> str:
-    return hashlib.sha256(x.encode()).hexdigest()
+def sha256_hash(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
-# ------------------- Endpoint -------------------
+# ------------------- Single Hash -------------------
+@app.post("/hash", dependencies=[Depends(verify_api_key)])
+def hash_single(phone: str):
+    phone = normalize_phone(phone)
+    return {"hashed_phone": sha256_hash(phone)}
+
+# ------------------- CSV Hash -------------------
 @app.post("/hash_csv", dependencies=[Depends(verify_api_key)])
 async def hash_csv(file: UploadFile = File(...)):
-    if not file.filename.endswith(".csv"):
-        raise HTTPException(status_code=400, detail="CSV only")
 
-    # Create temporary output file
+    if not file.filename.endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Only CSV allowed")
+
     temp_out = tempfile.NamedTemporaryFile(delete=False, suffix=".csv", mode="w", newline="", encoding="utf-8")
     writer = csv.writer(temp_out)
 
-    # Decode lines safely
-    try:
-        reader = csv.reader((line.decode("utf-8", errors="ignore") for line in file.file))
-        headers = next(reader)
-    except Exception as e:
-        temp_out.close()
-        raise HTTPException(status_code=400, detail=f"Failed to read CSV: {str(e)}")
+    # ------------------- Detect header -------------------
+    first_line = await file.read(1024)
+    file.file.seek(0)
+    header_line = first_line.decode("utf-8").splitlines()[0]
+    headers = [h.strip().lower() for h in header_line.split(",")]
 
-    # Detect columns
-    schema = []
-    col_type = []
-    for h in headers:
-        h_lower = h.lower()
-        if "phone" in h_lower or "mobile" in h_lower:
-            schema.append("PHONE")
-            col_type.append("phone")
-        elif "email" in h_lower:
-            schema.append("EMAIL")
-            col_type.append("email")
-        else:
-            schema.append(None)
-            col_type.append(None)
+    phone_idx = next((i for i, h in enumerate(headers) if "phone" in h or "mobile" in h), 0)
+    email_idx = next((i for i, h in enumerate(headers) if "email" in h), None)
 
-    # Write header
-    writer.writerow([s for s in schema if s])
+    # Output header
+    writer.writerow(["hashed_phone", "hashed_email" if email_idx is not None else ""])
 
-    # Process rows
-    for row in reader:
-        if not any(row):
-            continue  # skip empty rows
-        hashed_row = []
-        for i, val in enumerate(row):
-            if col_type[i] == "phone":
-                hashed_row.append(sha256(normalize_phone(val)))
-            elif col_type[i] == "email":
-                hashed_row.append(sha256(normalize_email(val)))
-        if hashed_row:
-            writer.writerow(hashed_row)
+    # ------------------- Stream CSV -------------------
+    for line in file.file:
+        decoded = line.decode("utf-8").strip()
+        if not decoded or any(skip_word in decoded.lower() for skip_word in ["phone", "mobile", "email"]):
+            continue
+
+        parts = decoded.split(",")
+        phone = normalize_phone(parts[phone_idx].strip()) if len(parts) > phone_idx else ""
+        email = normalize_email(parts[email_idx].strip()) if email_idx is not None and len(parts) > email_idx else ""
+
+        hashed_phone = sha256_hash(phone) if phone else ""
+        hashed_email = sha256_hash(email) if email else ""
+
+        writer.writerow([hashed_phone, hashed_email])
 
     temp_out.close()
-    return FileResponse(temp_out.name, filename="meta_hashed.csv", media_type="text/csv")
+
+  return FileResponse(
+    path=temp_out.name,
+    media_type="text/csv",
+    filename=f"hashed_{file.filename}"
+)
+
