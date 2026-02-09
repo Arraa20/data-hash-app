@@ -1,117 +1,126 @@
-from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
-from fastapi.security import APIKeyHeader
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-import hashlib
-import csv
-import os
-import tempfile
-import re
+import hashlib, csv, re, os, tempfile, sqlite3
 
-app = FastAPI(title="Meta Phone & Email Hashing API")
+app = FastAPI(title="Meta Hash & Upload API")
 
-# ENV API KEY
-API_KEY = os.getenv("API_KEY")
-api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
-
-# CORS
+# CORS (allow frontend dashboards)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["*"]
 )
 
-# Verify API Key
-def verify_api_key(api_key: str = Depends(api_key_header)):
+# --- API Key ---
+API_KEY = os.getenv("API_KEY", "TEST_KEY")  # replace with your key
+
+def verify_api_key(api_key: str):
     if api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
-# Normalize phone like Meta (E.164 style, Sri Lanka)
+# --- Phone normalization (Sri Lanka example) ---
 def normalize_phone(phone: str) -> str:
-    phone = re.sub(r"\D", "", phone)  # remove non-digits
+    phone = re.sub(r"\D", "", phone)
     if phone.startswith("0"):
         phone = "94" + phone[1:]
     elif phone.startswith("7") and len(phone) == 9:
         phone = "94" + phone
-    elif phone.startswith("94"):
-        pass
     return phone
 
-# Normalize email
+# --- Email normalization ---
 def normalize_email(email: str) -> str:
     return email.strip().lower()
 
-# SHA256 Meta compatible
+# --- SHA256 hashing ---
 def sha256_hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
-# Single hash API (phone only)
-@app.post("/hash", dependencies=[Depends(verify_api_key)])
-def hash_single(phone: str):
-    phone = normalize_phone(phone)
-    return {"hashed_phone": sha256_hash(phone)}
+# --- Simple SQLite logging ---
+DB_FILE = "meta_upload_logs.db"
 
-# CSV HASH ENDPOINT
-@app.post("/hash_csv", dependencies=[Depends(verify_api_key)])
-async def hash_csv(file: UploadFile = File(...)):
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename TEXT,
+            rows_processed INTEGER,
+            rows_hashed INTEGER,
+            client TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
+    conn.close()
 
+init_db()
+
+def log_upload(filename, rows_processed, rows_hashed, client="default"):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("INSERT INTO logs (filename, rows_processed, rows_hashed, client) VALUES (?,?,?,?)",
+              (filename, rows_processed, rows_hashed, client))
+    conn.commit()
+    conn.close()
+
+# --- Hash CSV endpoint ---
+@app.post("/hash_csv")
+async def hash_csv(file: UploadFile = File(...), api_key: str = Depends(verify_api_key)):
     if not file.filename.endswith(".csv"):
-        raise HTTPException(status_code=400, detail="Only CSV allowed")
+        raise HTTPException(status_code=400, detail="CSV only")
 
+    # Prepare output CSV
     temp_out = tempfile.NamedTemporaryFile(delete=False, suffix=".csv", mode="w", newline="", encoding="utf-8")
     writer = csv.writer(temp_out)
 
-    # Read first line as header to detect columns
-    first_line = file.file.readline().decode("utf-8", errors="replace").strip()
-    headers = [h.strip() for h in first_line.split(",")]
+    # Read input CSV
+    reader = csv.reader((line.decode("utf-8", errors="ignore") for line in file.file))
+    headers = next(reader, None)
 
-    # Detect phone and email column indices
-    phone_idx = None
-    email_idx = None
-    for i, h in enumerate(headers):
+    # Detect columns
+    col_type = []
+    for h in headers:
         h_lower = h.lower()
         if "phone" in h_lower or "mobile" in h_lower:
-            phone_idx = i
+            col_type.append("phone")
         elif "email" in h_lower:
-            email_idx = i
+            col_type.append("email")
+        else:
+            col_type.append(None)
 
-    if phone_idx is None and email_idx is None:
-        raise HTTPException(status_code=400, detail="No phone or email columns detected")
+    # Output header
+    output_headers = [h if col_type[i] else "" for i, h in enumerate(headers)]
+    writer.writerow([h for h in output_headers if h])
 
-    # Write output header
-    out_header = []
-    if phone_idx is not None:
-        out_header.append("hashed_phone")
-    if email_idx is not None:
-        out_header.append("hashed_email")
-    writer.writerow(out_header)
+    rows_processed = 0
+    rows_hashed = 0
 
-    # STREAM processing (fast, low RAM)
-    for line in file.file:
-        decoded = line.decode("utf-8", errors="replace").strip()
-        if not decoded:
-            continue
-        parts = decoded.split(",")
-
+    for row in reader:
+        rows_processed += 1
         hashed_row = []
-        # Phone
-        if phone_idx is not None and len(parts) > phone_idx:
-            phone = normalize_phone(parts[phone_idx].strip())
-            hashed_row.append(sha256_hash(phone) if phone else "")
-        # Email
-        if email_idx is not None and len(parts) > email_idx:
-            email = normalize_email(parts[email_idx].strip())
-            hashed_row.append(sha256_hash(email) if email else "")
-
+        for i, val in enumerate(row):
+            if col_type[i] == "phone":
+                norm = normalize_phone(val)
+                hashed_row.append(sha256_hash(norm))
+            elif col_type[i] == "email":
+                norm = normalize_email(val)
+                hashed_row.append(sha256_hash(norm))
         if hashed_row:
             writer.writerow(hashed_row)
+            rows_hashed += 1
 
     temp_out.close()
 
-    return FileResponse(
-        path=temp_out.name,
-        media_type="text/csv",
-        filename="meta_hashed_output.csv"
-    )
+    # Log to DB
+    log_upload(file.filename, rows_processed, rows_hashed)
+
+    # Return JSON (for beginner dashboard)
+    return JSONResponse({
+        "filename": file.filename,
+        "rows_processed": rows_processed,
+        "rows_hashed": rows_hashed,
+        "match_rate_estimate": f"{(rows_hashed/rows_processed*100):.2f}%" if rows_processed else "0%"
+    })
