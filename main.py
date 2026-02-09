@@ -2,17 +2,11 @@ from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
 from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-import hashlib
-import csv
-import os
-import tempfile
-import re
+import hashlib, csv, os, tempfile, re
 
-app = FastAPI(title="Meta Phone Hashing API")
+app = FastAPI(title="Universal Data Anonymization API")
 
-# ENV API KEY
 API_KEY = os.getenv("API_KEY")
-
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
 
 # CORS
@@ -24,64 +18,70 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Verify API Key
 def verify_api_key(api_key: str = Depends(api_key_header)):
     if api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
-# Normalize phone like Meta (E.164 style)
-def normalize_phone(phone: str) -> str:
-    phone = re.sub(r"\D", "", phone)  # remove non-digits
-    
-    # Sri Lanka normalization examples
-    if phone.startswith("0"):
-        phone = "94" + phone[1:]
-    elif phone.startswith("7") and len(phone) == 9:
-        phone = "94" + phone
-    elif phone.startswith("94"):
-        pass
-    
-    return phone
+# Normalize phone (Sri Lanka)
+def normalize_phone(p):
+    p = re.sub(r"\D", "", p)
+    if p.startswith("0"):
+        return "94" + p[1:]
+    if p.startswith("7") and len(p) == 9:
+        return "94" + p
+    return p
 
-# SHA256 Meta compatible
-def sha256_hash(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+# Normalize email
+def normalize_email(e):
+    return e.strip().lower()
 
-# Single hash API
-@app.post("/hash", dependencies=[Depends(verify_api_key)])
-def hash_single(phone: str):
-    phone = normalize_phone(phone)
-    return {"hashed_phone": sha256_hash(phone)}
+# Hash
+def sha256(x):
+    return hashlib.sha256(x.encode()).hexdigest()
 
-# CSV HASH ENDPOINT
 @app.post("/hash_csv", dependencies=[Depends(verify_api_key)])
 async def hash_csv(file: UploadFile = File(...)):
 
     if not file.filename.endswith(".csv"):
-        raise HTTPException(status_code=400, detail="Only CSV allowed")
+        raise HTTPException(status_code=400, detail="CSV only")
 
     temp_out = tempfile.NamedTemporaryFile(delete=False, suffix=".csv", mode="w", newline="", encoding="utf-8")
     writer = csv.writer(temp_out)
-    writer.writerow(["hashed_phone"])  # only hashed output
 
-    # STREAM processing (very fast, low RAM)
-    for line in file.file:
-        decoded = line.decode("utf-8").strip()
-        if not decoded or "phone" in decoded.lower():
-            continue
+    reader = csv.reader((line.decode("utf-8") for line in file.file))
+    headers = next(reader)
 
-        # assume first column is phone
-        phone = decoded.split(",")[0].strip()
-        phone = normalize_phone(phone)
+    # Detect columns
+    schema = []
+    col_type = []
 
-        if phone:
-            hashed = sha256_hash(phone)
-            writer.writerow([hashed])
+    for h in headers:
+        h_lower = h.lower()
+        if "phone" in h_lower or "mobile" in h_lower:
+            schema.append("PHONE")
+            col_type.append("phone")
+        elif "email" in h_lower:
+            schema.append("EMAIL")
+            col_type.append("email")
+        else:
+            schema.append(None)
+            col_type.append(None)
+
+    # Output header only hashed fields
+    writer.writerow([s for s in schema if s])
+
+    for row in reader:
+        hashed_row = []
+        for i, val in enumerate(row):
+            if col_type[i] == "phone":
+                norm = normalize_phone(val)
+                hashed_row.append(sha256(norm))
+            elif col_type[i] == "email":
+                norm = normalize_email(val)
+                hashed_row.append(sha256(norm))
+        if hashed_row:
+            writer.writerow(hashed_row)
 
     temp_out.close()
 
-    return FileResponse(
-        path=temp_out.name,
-        media_type="text/csv",
-        filename="meta_hashed_output.csv"
-    )
+    return FileResponse(temp_out.name, filename="meta_hashed.csv", media_type="text/csv")
