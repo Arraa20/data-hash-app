@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
 from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from urllib.parse import quote
 import hashlib
 import csv
 import os
@@ -105,8 +106,10 @@ async def hash_csv(file: UploadFile = File(...)):
 
     temp_out.close()
 
+    download_name = f"{prefix}_hashed.csv"
     return FileResponse(
-        path=temp_out.name,
-        filename=f"{prefix}_hashed.csv",
-        media_type="text/csv"
-    )
+    path=temp_out.name,
+    media_type="text/csv",
+    filename=download_name,
+    headers={"Content-Disposition": f'attachment; filename="{quote(download_name)}"'}
+)
