@@ -93,9 +93,8 @@ async def hash_csv(file: UploadFile = File(...)):
 
     temp_out.close()
 
-  return FileResponse(
-    path=temp_out.name,
-    media_type="text/csv",
-    filename=f"hashed_{file.filename}"
-)
-
+    return FileResponse(
+        path=temp_out.name,
+        media_type="text/csv",
+        filename=f"hashed_{file.filename}"
+    )
